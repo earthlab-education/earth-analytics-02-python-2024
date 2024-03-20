@@ -1,0 +1,936 @@
+---
+jupyter: python3
+---
+
+<div><img style="float: left; padding-right: 3em;" src="https://avatars.githubusercontent.com/u/19476722" width="150" /><div/>
+
+# Earth Data Science Coding Challenge!
+Before we get started, make sure to read or review the guidelines below. These will help make sure that your code is **readable** and **reproducible**. 
+
+## Don't get **caught** by these Jupyter notebook gotchas
+
+<img src="https://miro.medium.com/v2/resize:fit:4800/format:webp/1*o0HleR7BSe8W-pTnmucqHA.jpeg" width=300 style="padding: 1em; border-style: solid; border-color: grey;" />
+
+  > *Image source: https://alaskausfws.medium.com/whats-big-and-brown-and-loves-salmon-e1803579ee36*
+
+These are the most common issues that will keep you from getting started and delay your code review:
+
+1. When you try to run some code on GitHub Codespaces, you may be prompted to select a **kernel**.
+   * The **kernel** refers to the version of Python you are using
+   * You should use the **base** kernel, which should be the default option. 
+   * You can also use the `Select Kernel` menu in the upper right to select the **base** kernel
+2. Before you commit your work, make sure it runs **reproducibly** by clicking:
+   1. `Restart` (this button won't appear until you've run some code), then
+   2. `Run All`
+
+## Check your code to make sure it's clean and easy to read
+
+<img src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSO1w9WrbwbuMLN14IezH-iq2HEGwO3JDvmo5Y_hQIy7k-Xo2gZH-mP2GUIG6RFWL04X1k&usqp=CAU" height=200 />
+
+* Format all cells prior to submitting (right click on your code).
+* Use expressive names for variables so you or the reader knows what they are. 
+* Use comments to explain your code -- e.g. 
+  ```python
+  # This is a comment, it starts with a hash sign
+  ```
+
+## Label and describe your plots
+
+![Source: https://xkcd.com/833](https://imgs.xkcd.com/comics/convincing.png)
+
+Make sure each plot has:
+  * A title that explains where and when the data are from
+  * x- and y- axis labels with **units** where appropriate
+  * A legend where appropriate
+
+
+## Icons: how to use this notebook
+We use the following icons to let you know when you need to change something to complete the challenge:
+  * &#128187; means you need to write or edit some code.
+  
+  * &#128214;  indicates recommended reading
+  
+  * &#9998; marks written responses to questions
+  
+  * &#127798; is an optional extra challenge
+  
+
+---
+
+# Chicago Urban Greenspace
+
+In this notebook, you will write code to calculate statistics about urban greenspace in Chicago. You will then use a linear model to identify statistically significant correlations between the distribution of greenspace and socioeconomic data collected by the U.S. Census. For your analysis, you will be roughly following the methodology of [this paper about Portland, OR green space](https://doi.org/10.3390/f7080162).
+
+![](https://s3.amazonaws.com/medill.wordpress.offload/WP%20Media%20Folder%20-%20medill-reports-chicago/wp-content/uploads/sites/3/2019/03/lincoln-parkflickr-sized.jpg)
+
+> Image source: [Medill News](https://news.medill.northwestern.edu/chicago/friends-of-the-parks-alleges-chicago-green-spaces-still-map-racial-inequality/)
+
+### Working with larger-than-memory (big) data
+
+The National Agricultural Imagery Program (NAIP) data for the City of Chicago takes up about 20GB. This amount of data is likely to crash your kernel if you try to load it all in at once. It also would be inconvenient to store on your harddrive so that you can load it in a bit at a time for analysis. Even if your are using a computer that would be able to handle this amount of data, imagine if you were analysing the entire United States over multiple years!
+
+To help with this problem, you will use cloud-based tools to calculate your statistics instead of downloading rasters to your computer or container. You can perform basic calculations such as clipping and computing summary statistics entirely in the cloud, provided you give `rioxarray` the right kind of URL.
+
+### Check your work with testing!
+
+This notebook does not have pre-built tests. You will need to write your own test code to make sure everything is working the way that you want. For many operations, this will be as simple as creating a plot to check that all your data lines up spatially the way you were expecting, or printing values as you go.
+
+## STEP 1: Set up your analysis
+
+For this analysis, you will need a few packages that may not be in your environment:
+
+  * pystac-client will help you search for cloud data in a STAC (SpatioTemporal Access Catalogs)
+  * `census` and `us` will help you access U.S. Census data
+  
+**YOUR TASK:**
+
+1. Install required packages using the command (`-y` tells conda to automatically continue with the install instead of asking for permission):
+   ```bash
+   conda install -y -c conda-forge pystac-client census us
+   ```
+2. Import necessary packages
+3. Create **reproducible file paths** for your project file structure.
+
+**Please store your data files somewhere in `~/earthpy-analytics/data`. This helps me keep my data files organized when I am grading, and helps you avoid large data files in your GitHub repository.**
+
+```{python}
+#| deletable: false
+#| nbgrader: {cell_type: code, checksum: d2dc34730b8f60cf4eb0312f69138d3c, grade: false, grade_id: imports-ans, locked: false, schema_version: 3, solution: true, task: false}
+#| tags: []
+# import libraries
+
+import getpass
+import os
+
+
+import earthpy as et
+import geopandas as gpd
+import geoviews as gv
+import geoviews.tile_sources as gvts
+import holoviews as hv
+import hvplot.pandas
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import pystac_client
+import rasterio
+from rasterio.mask import mask
+from rasterio.merge import merge
+import rasterio.plot as rp
+from rasterio.errors import RasterioIOError
+import rioxarray as rxr
+from rioxarray.merge import merge_arrays
+import shapely
+import warnings
+import xarray as xr
+
+from census import Census
+from hvplot.plotting import scatter_matrix
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_squared_error
+from sklearn.impute import SimpleImputer
+from tqdm.notebook import tqdm
+from us import states
+
+
+
+# Create a path to the home/earth-analytics directory on your computer
+home_dir = os.path.join(et.io.HOME, "earth-analytics")
+data_dir = os.path.join(home_dir, 'data')
+proj_dir = os.path.join(data_dir, 'ea_proj1')
+census_dir = os.path.join(proj_dir, 'census_data')
+naip_dir = os.path.join(proj_dir, 'naip_data')
+ndvi_dir = os.path.join(proj_dir, 'ndvi_data')
+
+for a_dir in [proj_dir, census_dir, naip_dir, ndvi_dir]:
+    if not os.path.exists(a_dir):
+        os.makedirs(a_dir)
+
+# This code will help when access to the Microsoft Planetary Computer STAC needs more time
+os.environ["GDAL_HTTP_MAX_RETRY"] = "5"
+os.environ["GDAL_HTTP_RETRY_DELAY"] = "1"
+```
+
+## STEP 2 - Download/Access Urban Greenspaces and Census Data
+
+### Download City of Chicago Boundary
+
+You can find the City of Chicago Boundary on the [City of Chicago Data Portal](https://data.cityofchicago.org/). 
+
+> **Make sure to download in `Original` format**, as the `Shapefile` format has not been working lately.
+
+**YOUR TASK:**
+
+  1. Download the City of Chicago Boundary
+  2. Use a **conditional statement** to cache the boundary at a **reproducible file path**
+
+```{python}
+#| deletable: false
+#| nbgrader: {cell_type: code, checksum: f351e3dccbfe7948da3c162d55613850, grade: false, grade_id: chicago-ans, locked: false, schema_version: 3, solution: true, task: false}
+#| tags: []
+# Download the City of Chicago boundary and put it in folder. 
+# If the boundary has already been downloaded then use the file
+#   from the folder.
+
+chi_path = os.path.join(proj_dir, 'chicago_boundary')
+if not os.path.exists(chi_path):
+    chi_url = ("https://data.cityofchicago.org/api"
+               "/geospatial/ewy2-6yfk?method=export&format=Original") 
+    gpd.read_file(chi_url).to_file(chi_path)
+    
+chi_boundary = gpd.read_file(chi_path)
+chi_boundary.plot()
+```
+
+```{python}
+#| tags: []
+# What projection is the Chicago shapefile set to?
+chi_boundary.crs
+```
+
+```{python}
+#| tags: []
+# Reproject to WGS 84 -- WGS84 - World Geodetic System 1984 to match NAIP imagery
+
+chi_reprojected = chi_boundary.to_crs("EPSG:4326")
+print(chi_reprojected.crs)
+```
+
+YOUR ANSWER HERE
+
+### Download census tracts and select those that intersect the study boundary
+
+You can obtain urls for the U.S. Census Tract shapefiles from [the TIGER service](https://www.census.gov/geographies/mapping-files/time-series/geo/tiger-line-file.html). You'll notice that these URLs use the state FIPS, which you can get from the `us` package using the command `us.states.ABBR.fips` (e.g. for the state of Colorado it would be `us.states.CO.fips`.
+
+**YOUR TASK:**
+
+1. Download the Census tract Shapefile for the state of Illinois (IL)
+2. Use a **conditional statement** to cache the download
+3. Use a **spatial join** to select only the Census tracts that lie at least partially within the City of Chicago boundary
+
+```{python}
+#| deletable: false
+#| nbgrader: {cell_type: code, checksum: 8ca94b0235362d3433a1c19249971992, grade: false, grade_id: tracts-ans, locked: false, schema_version: 3, solution: true, task: false}
+#| tags: []
+# Download the City of Chicago Census Tract shapefiles and put it in folder. 
+# If the boundary has already been downloaded then use the file
+#   from the folder.
+
+census_path = os.path.join(proj_dir, 'illinois_census_tract')
+if not os.path.exists(census_path):
+    census_url = ("https://www2.census.gov/geo/tiger/TIGER_RD18/STATE/17_ILLINOIS/17/tl_rd22_17_tract.zip") 
+    gpd.read_file(census_url).to_file(census_path)
+    
+census_tract = gpd.read_file(census_path)
+census_tract.plot()
+```
+
+```{python}
+#| tags: []
+# Check to see what coordinate system the Tiger Tract data is using
+census_tract.crs
+```
+
+```{python}
+#| tags: []
+# Reproject to WGS 84 -- WGS84 - World Geodetic System 1984 to match NAIP imagery
+
+census_reprojected = census_tract.to_crs("EPSG:4326")
+print(census_reprojected.crs)
+
+```
+
+```{python}
+#| tags: []
+# Perform a spatial join to extract Chicago area
+chicago_tracts = gpd.sjoin(census_reprojected, chi_reprojected, op='intersects')
+
+# Save the result to a new Shapefile if needed
+chicago_tracts.to_file(os.path.join(proj_dir, 'chicago_tracts'))
+
+chicago_tracts.plot()
+```
+
+YOUR ANSWER HERE
+
+### Download Lake Michigan boundary and clip census tracts
+
+If you plot the Census tract data you just downloaded, you will notice that the census tracts along the coast of Lake Michigan extend into the lake. This will throw off your analysis if you leave it there. There are a few ways to deal with this type of problem, but for now you can use a boundary for Lake Michigan to clip the Census tracts. You can find a shapefile for Lake Michigan from the [State of Michigan MapServer](https://gis-michigan.opendata.arcgis.com/datasets/lake-michigan-shoreline/explore?location=43.785916%2C-90.269240%2C7.00)
+
+**YOUR TASK:**
+
+  1. Download the Lake Michigan boundary file
+  2. Use a **conditional statement** to cache the download
+  3. Use the `.overlay` method of GeoDataFrames to clip off any parts of your Census tract boundaries that are in Lake Michigan
+
+```{python}
+#| deletable: false
+#| nbgrader: {cell_type: code, checksum: 89825a7fffde5a63c3af9351fb3b6949, grade: false, grade_id: lake-ans, locked: false, schema_version: 3, solution: true, task: false}
+#| tags: []
+# Download the City of Chicago Census Tract shapefiles and put it in folder. 
+# If the boundary has already been downloaded then use the file
+#   from the folder.
+
+lake_path = os.path.join(proj_dir, 'michigan_boundary')
+if not os.path.exists(lake_path):
+    lake_url = ("https://gisagocss.state.mi.us/arcgis/rest/"
+                "services/OpenData/hydro/MapServer/12/"
+                "query?where=1%3D1&outFields=*&outSR=4326&f=json") 
+    gpd.read_file(lake_url).to_file(lake_path)
+    
+lake_boundary = gpd.read_file(lake_path)
+lake_boundary.plot()
+```
+
+```{python}
+#| tags: []
+#  Reproject to WGS 84 -- WGS84 - World Geodetic System 1984 to match NAIP imagery
+
+lake_bound_repro = lake_boundary.to_crs("EPSG:4326")
+print(lake_bound_repro.crs)
+
+lake_bound_repro.crs
+```
+
+```{python}
+#| tags: []
+# Use the .overlay method of GeoDataFrames to clip off any parts of your Census tract boundaries that are in Lake Michigan
+
+chicago_census_gdf = chicago_tracts.overlay(lake_bound_repro, how='difference')
+
+chicago_census_gdf.plot()
+chicago_census_gdf
+```
+
+YOUR ANSWER HERE
+
+### Access census data and join with the Census tract geometry
+
+The U.S. Census Bureau collects a number of socioeconomic variables that might be correlated with Urban Greenspace. For this assignment, start with the Median Income. You can find some useful sample code in the [PyGIS textbook page on accessing Census data](https://pygis.io/docs/d_access_census.html)
+
+**YOUR TASK:**
+
+  1. Sign up for a U.S. Census Bureau API Key at their [Request a Key website](https://api.census.gov/data/key_signup.html). You can list the University of Colorado as your organization.
+  2. Locate the Median Income in the [list of Census variables](https://api.census.gov/data/2019/acs/acs5/variables.html)
+  3. Download the 2021 Median Income for each Census Tract, making sure to **cache your download**
+  
+> NOTE: The Census API will only let you download 50 tracts at once. Can you figure out how to use a loop to ask for 50 tracts at a time?
+
+```{python}
+#| nbgrader: {cell_type: code, checksum: 9505e2598968c0493f6dff974fa25204, grade: false, grade_id: census-ans, locked: false, schema_version: 3, solution: true, task: false}
+#| tags: []
+#  Download the Census data for the state of Illinois for the year 2021
+
+census_data_path = os.path.join(proj_dir, 'census_data', 'il_census.csv')
+if not os.path.exists(census_data_path):
+    api_key = getpass.getpass('U.S. Census API Key')
+    c = Census(api_key)
+    il_census = c.acs5.state_county_tract(fields = ('NAME', 'B06011_001E', 'B19301_001E', 'B01003_001E', 'B25035_001E'),
+                                      state_fips = states.IL.fips,
+                                      county_fips = "*",
+                                      tract = "*",
+                                      year = 2021) 
+    il_df = pd.DataFrame(il_census)
+    print("Column data types for il_df data:\n{}".format(il_df.dtypes))
+    il_df.to_csv(census_data_path, index=False, header=False)
+    
+# Explicitly set data types to object to preserve leading zeros
+column_names = (['NAME', 'median_income', 'per_capita_income',
+                     'population', 'median_year_built','state', 'county', 'tract', 'GEOID'])
+column_dtypes = ({'NAME': object, 'median_income': float, 'per_capita_income': float,
+                      'population': float, 'median_year_built': int, 'state': object,
+                      'county': object, 'tract': object, 'GEOID': object})
+    
+# Read the CSV file into a DataFrame
+il_census_csv = pd.read_csv(census_data_path, names=column_names, dtype=column_dtypes)
+  
+# Show the dataframe
+print(il_census_csv.tail(10))
+print('Shape: ', il_census_csv.shape)
+#  Confirm that the data is in the same format after changing it to .csv file
+print("Column data types for il_census_csv data:\n{}".format(il_census_csv.dtypes))
+#print("Column data types for il_df data:\n{}".format(il_df.dtypes))
+
+
+
+```
+
+#### For what ever reason, I can't get this cell to delete
+
+```{python}
+#| tags: []
+# Combine state, county, and tract columns together to create a new string and assign to new column
+il_census_csv["GEOID"] = (il_census_csv["state"].astype(str) + 
+                          il_census_csv["county"].astype(str) + 
+                          il_census_csv["tract"].astype(str))
+
+# Print head of dataframe
+il_census_csv
+```
+
+```{python}
+#| tags: []
+# Remove certian columns that are not going to be used
+il_census_df = il_census_csv.drop(columns = ["state", "county", "tract"])
+
+# Show updated dataframe
+il_census_df
+```
+
+YOUR ANSWER HERE
+
+**YOUR TASK:**
+
+  1. Merge the census tract `GeoDataFrame` with the median income `DataFrame`
+  2. Do all the census tracts have data? Eliminate any that do not.
+
+```{python}
+#| deletable: false
+#| nbgrader: {cell_type: code, checksum: b2d3a2d7cf1c88a7339b2fcb1b35e9ea, grade: false, grade_id: merge-ans, locked: false, schema_version: 3, solution: true, task: false}
+#| tags: []
+# Now, you can perform the merge using the common column
+chi_tract_gdf = chicago_census_gdf.merge(il_census_df, on='GEOID')
+
+# Show result
+chi_tract_gdf.plot()
+```
+
+```{python}
+#| tags: []
+# Clean the data to remove unwanted values.  This will help when plotting 
+#  statistical data.
+
+# Replace the -666666 median income values with 'nan'
+median_income = chi_tract_gdf.median_income
+min_mi = median_income.min()
+median_income.replace(min_mi, np.nan, inplace=True)
+
+# Replace the -666666 per capita income values with 'nan'
+per_capita_income = chi_tract_gdf.per_capita_income
+cap_min = per_capita_income.min()
+per_capita_income.replace(cap_min, np.nan, inplace=True)
+
+
+# Replace -666666 and 0 with NaN
+median_year_built = chi_tract_gdf.median_year_built
+year_min = median_year_built.min()
+median_year_built.replace(year_min, np.nan,inplace=True)
+median_year_built.replace(0, np.nan, inplace=True)
+```
+
+```{python}
+#| tags: []
+plt.figure(figsize = (10, 8))
+plt.hist(chi_tract_gdf['median_year_built'], bins=50);
+```
+
+```{python}
+#| tags: []
+# Assuming you have already merged the GeoDataFrame and DataFrame and obtained merged_gdf
+
+# Check for values that are not relevant in the merged DataFrame
+missing_values = chi_tract_gdf.isnull().sum()
+
+# If there are no missing values, every row has data
+if missing_values.sum() == 0:
+    print("Every row has data in the merged DataFrame.")
+else:
+    print(missing_values)
+```
+
+### Get NDVI statistics using STAC catalog
+
+NAIP data are freely available through the Microsoft Planetary Computer STAC. Get started by accessing the catalog with the following code:
+
+```python
+e84_catalog = pystac_client.Client.open(
+    "https://planetarycomputer.microsoft.com/api/stac/v1"
+)
+```
+
+```{python}
+#| deletable: false
+#| nbgrader: {cell_type: code, checksum: 31e985282eb5a7a7a78a6b85844ad69f, grade: false, grade_id: stac-ans, locked: false, schema_version: 3, solution: true, task: false}
+#| tags: []
+# Access the Microsoft Planetary Computer STAC
+
+pc_catalog = pystac_client.Client.open(
+    "https://planetarycomputer.microsoft.com/api/stac/v1")
+
+pc_catalog.title
+```
+
+**YOUR TASK:**
+
+  1. Using a loop, for each Census Tract:
+  
+     1. Use the following sample code to search for data, replacing the names with applicable values with descriptive names:
+       
+        ```python
+        search = e84_catalog.search(
+            collections=["naip"],
+            intersects=shapely.to_geojson(tract_geometry),
+            datetime=f"{year}"
+        )
+        ```
+      2. Access the url using `search.assets['image'].href`
+      
+  2. Accumulate the urls in a `pd.DataFrame` or `dict` for later
+  
+> NOTE: As always -- DO NOT try to write this loop all at once! Stick with one step at a time, making sure to test your work.
+
+> HINT: Occasionally you may find that the STAC service is momentarily unavailable. You may need to include code that will retry the request when you get that error.
+
+```{python}
+#| tags: []
+#  Iterate thru the 'chi_tract_gdf' and put the tract name, title_id, 
+#   and url for each NAIP image
+
+naip_data_path = os.path.join(proj_dir, 'naip_data', 'naip_urls')
+if not os.path.exists(naip_data_path):
+
+# Initialize an empty list to store DataFrames
+    dfs = []
+
+# Iterate through each row in chi_tract_gdf
+    for index, row in chi_tract_gdf.iterrows():
+        geometry_geojson = shapely.geometry.mapping(row.geometry)
+    
+        chi_naip_search = pc_catalog.search(
+            collections=["naip"],
+            intersects=geometry_geojson,
+            datetime=f"{2021}"
+        )
+
+    # Initialize a list to store data for each item in the search results
+        item_data = []
+
+    # Iterate through each item in the search results
+        for naip_item in chi_naip_search.items():
+        # print(naip_item.id)
+        # Append data to the list
+            item_data.append({
+                'tract': row.TRACTCE,
+                'title_id': naip_item.id,
+                'url': naip_item.assets['image'].href
+            })
+
+    # Create a DataFrame for the current row
+        df = pd.DataFrame(item_data)
+
+    # Append the DataFrame to the list
+        dfs.append(df)
+    
+# Concatenate all DataFrames in the list into a single DataFrame
+    all_item_url_df = pd.concat(dfs, ignore_index=True)
+
+# Reset index for the final DataFrame
+    all_item_url_df.reset_index(drop=True, inplace=True)
+
+    all_item_url_df.to_csv(naip_data_path, index=False, header=False)
+
+# Read the CSV file into a DataFrame
+# il_census_csv = pd.read_csv(census_data_path, names=column_names, dtype=column_dtypes)
+naip_col_name = ['tract', 'title_id', 'url']
+naip_col_dtypes = ({'tract': object, 'title_id': object, 'url': object})
+
+naip_urls_df = pd.read_csv(naip_data_path, names=naip_col_name, dtype=naip_col_dtypes)
+```
+
+```{python}
+#| deletable: false
+#| nbgrader: {cell_type: code, checksum: 17b6130e94e29d9744a424f4488f109b, grade: false, grade_id: ndvi-url-ans, locked: false, schema_version: 3, solution: true, task: false}
+#| tags: []
+naip_urls_df
+```
+
+**YOUR TASK:**
+
+  1. Using a loop, for each Census Tract:
+     1. Using a loop, for each data URL:
+  
+        1. Use `rioxarray` to open up a connection to the STAC asset, just like you would a file on your computer
+        2. Crop and then clip your data to the census tract boundary
+            > HINT: check out the `.clip_box` parameter `auto_expand` and the `clip` parameter `all_touched` to make sure you don't end up with an empty array
+        3. Compute NDVI for the tract
+        
+      2. Merge the NDVI rasters
+      3. Compute:
+         1. total number of pixels within the tract
+         2. fraction of pixels with an NDVI greater than .12 within the tract (and any other statistics you would like to look at)
+    
+      4. Accumulate the statistics in a text file or database for later
+
+  2. Using a condition, ensure that you do not run this computation if you have already saved values. You do not want to run this step many times, or have to restart from scratch!
+
+```{python}
+#| tags: []
+ndvi_data_path = os.path.join(proj_dir, 'ndvi_data', 'ndvi_stats')
+if not os.path.exists(ndvi_data_path):
+
+    warnings.filterwarnings("ignore", message="The nodata value .* has been automatically changed .*")
+
+    # List to store statistics for each tract
+    tract_statistics = {}
+
+    # Iterate over each group in the DataFrame
+    for tract, tract_data in tqdm(naip_urls_df.groupby('tract'), desc='Processing Tracts'):
+        tract_rasters = []
+    
+        # Iterate over each row in the group
+        for index, row in tract_data.iterrows():
+            # Open the NAIP raster
+            sample = rxr.open_rasterio(row.url, masked=True, nodata=np.nan).squeeze()
+        
+            # Extract tract boundary and convert to raster CRS
+            boundary_gdf = chi_tract_gdf.to_crs(sample.rio.crs).loc[chi_tract_gdf.TRACTCE == tract]
+        
+            # Crop the raster using the bounding box
+            cropped_naip_vda = sample.rio.clip_box(*boundary_gdf.total_bounds, auto_expand=True)
+        
+            # Clip the raster to the tract's boundary
+            clipped_naip_vda = cropped_naip_vda.rio.clip(boundary_gdf.geometry, all_touched=True)
+        
+            # Append clipped raster to the list
+            tract_rasters.append(clipped_naip_vda)
+        
+        # Merge the clipped rasters
+        merged_raster = merge_arrays(tract_rasters)
+    
+        # Check for one-dimensional raster
+        if merged_raster.sizes['x'] == 1 or merged_raster.sizes['y'] == 1:
+            print(f"Warning: One-dimensional raster encountered for tract {tract}")
+            continue  # Skip further processing for this tract
+    
+        # Calculate NDVI for each cell
+        red = merged_raster.sel(band=1)
+        nir = merged_raster.sel(band=4)
+        ndvi = (nir - red) / (nir + red)
+    
+        # Calculate the mean NDVI value for the tract
+        mean_ndvi = ndvi.mean().item()  # Convert to scalar value
+    
+        # Count non-masked cells
+        cell_count = np.sum(~np.isnan(merged_raster.values))
+    
+        # Calculate fraction of pixels with NDVI > 0.12
+        ndvi_greater_than_012 = np.sum(ndvi > 0.12)
+        fraction_ndvi_greater_than_012 = (ndvi_greater_than_012 / cell_count).item() if cell_count > 0 else 0
+    
+    
+        # Append statistics to the dictionary with tract number as key
+        tract_statistics[tract] = {
+            'mean_ndvi' : mean_ndvi,
+            'cell_count': cell_count,
+            'fraction_ndvi_greater_than_012': fraction_ndvi_greater_than_012
+        }
+    
+        # Delete merged_raster variable to release memory
+        del merged_raster
+    
+ 
+```
+
+```{python}
+#| tags: []
+ndvi_data_path = os.path.join(proj_dir, 'ndvi_data', 'ndvi_stats')
+if not os.path.exists(ndvi_data_path):
+
+    warnings.filterwarnings("ignore", message="The nodata value .* has been automatically changed .*")
+    # List to store statistics for each tract
+    tract_statistics = {}
+
+    # Iterate over each group in the DataFrame
+    for tract, tract_data in tqdm(naip_urls_df.groupby('tract'), desc='Processing Tracts'):
+        tract_rasters = []
+
+        # Iterate over each row in the group
+        for index, row in tract_data.iterrows():
+            try:
+                # Open the NAIP raster
+                sample = rxr.open_rasterio(row.url, masked=True, nodata=np.nan).squeeze()
+
+                # Extract tract boundary and convert to raster CRS
+                boundary_gdf = chi_tract_gdf.to_crs(sample.rio.crs).loc[chi_tract_gdf.TRACTCE == tract]
+
+                # Check if the boundary is empty or not
+                if boundary_gdf.empty:
+                    print(f"Warning: No boundary found for tract {tract}")
+                    continue  # Skip further processing for this tract
+
+                # Crop the raster using the bounding box
+                cropped_naip_vda = sample.rio.clip_box(*boundary_gdf.total_bounds, auto_expand=True)
+
+                # Check if there are enough valid data points
+                if np.sum(~np.isnan(cropped_naip_vda.values)) <= 1:
+                    print(f"Warning: Clipped raster for tract {tract} has insufficient data points.")
+                    continue  # Skip further processing for this tract
+
+                # Clip the raster to the tract's boundary
+                clipped_naip_vda = cropped_naip_vda.rio.clip(boundary_gdf.geometry, all_touched=True)
+
+                # Append clipped raster to the list
+                tract_rasters.append(clipped_naip_vda)
+
+            except RasterioIOError as e:
+                print(f"Error reading raster file: {e}")
+
+        # Merge the clipped rasters
+        merged_raster = merge_arrays(tract_rasters)
+
+        # Check for one-dimensional raster
+        if merged_raster.sizes['x'] == 1 or merged_raster.sizes['y'] == 1:
+            print(f"Warning: One-dimensional raster encountered for tract {tract}")
+            continue  # Skip further processing for this tract
+    
+        # Calculate NDVI for each cell
+        red = merged_raster.sel(band=1)
+        nir = merged_raster.sel(band=4)
+        ndvi = (nir - red) / (nir + red)
+
+        # Calculate the mean NDVI value for the tract
+        mean_ndvi = ndvi.mean().item()  # Convert to scalar value
+
+        # Count non-masked cells
+        cell_count = np.sum(~np.isnan(merged_raster.values))
+
+        # Calculate fraction of pixels with NDVI > 0.12
+        ndvi_greater_than_012 = np.sum(ndvi > 0.12)
+        fraction_ndvi_greater_than_012 = (ndvi_greater_than_012 / cell_count).item() if cell_count > 0 else 0
+
+
+        # Append statistics to the dictionary with tract number as key
+        tract_statistics[tract] = {
+            'mean_ndvi' : mean_ndvi,
+            'cell_count': cell_count,
+            'fraction_ndvi_greater_than_012': fraction_ndvi_greater_than_012
+            }
+
+        # Delete merged_raster variable to release memory
+        del merged_raster
+
+```
+
+```{python}
+#| tags: []
+ndvi_data_path = os.path.join(proj_dir, 'ndvi_data', 'ndvi_stats')
+# Read the CSV file into a DataFrame
+just_test = pd.read_csv(ndvi_data_path)
+# just_test['tract'] = just_test['tract'].astype('object')
+just_test
+```
+
+```{python}
+#| deletable: false
+#| nbgrader: {cell_type: code, checksum: 70370247d696d325fd6d021b86421d66, grade: false, grade_id: pipeline-ans, locked: false, schema_version: 3, solution: true, task: false}
+#| tags: []
+# Create a copy of chi_tract_gdf
+chi_tract_gdf_modified = chi_tract_gdf.copy()
+
+# Rename the 'TRACTCE' column to 'tract'
+chi_tract_gdf_modified.rename(columns={'TRACTCE': 'tract'}, inplace=True)
+
+# Convert the 'tract' column to int64
+chi_tract_gdf_modified['tract'] = chi_tract_gdf_modified['tract'].astype('int64')
+```
+
+```{python}
+#| tags: []
+# Merge the Chicago tract GeoDataFrame and the NDVI statistic DataFrame
+#chi_ndvi_gdf = chi_tract_gdf.merge(tract_stats, on='tract')
+
+# chi_ndvi_gdf = chi_tract_gdf.merge(just_test, on='tract')
+merged_stats_gdf = pd.merge(chi_tract_gdf_modified, just_test, on='tract')
+
+
+merged_stats_gdf
+```
+
+```{python}
+#| tags: []
+#  Clean the GeoDataFrame so it is easier to work with.
+
+columns_to_remove = (['STATEFP', 'COUNTYFP','GEOID', 'NAME_left', 'NAMELSAD',
+                      'MTFCC', 'FUNCSTAT', 'ALAND', 'AWATER', 'INTPTLAT',
+                      'INTPTLON', 'index_right', 'OBJECTID', 'NAME_right',
+                      'SHAPE_AREA','SHAPE_LEN', 'NAME'])
+clean_gdf = merged_stats_gdf.drop(columns=columns_to_remove)
+clean_gdf.dtypes
+```
+
+## STEP 3 - Explore your data with plots
+
+### Chloropleth plots
+
+Before running any statistical models on your data, you should check that your download worked. You should see differences in both median income and mean NDVI across the City.
+
+**Create a plot that:**
+  
+  * 2 side-by-side Chloropleth plots
+  * Median income on one and mean NDVI on the other
+  * Make sure to include a title and labeled color bars
+
+```{python}
+#| deletable: false
+#| nbgrader: {cell_type: code, checksum: 344a169db01c49e212579e8d32cc4775, grade: false, grade_id: chloropleth-ans, locked: false, schema_version: 3, solution: true, task: false}
+#| tags: []
+
+# Create chloropleth plots for NDVI and median income
+ndvi_plot = clean_gdf.hvplot(c='mean_ndvi', geo=True, cmap='YlGn',tiles=True,
+                                width=500,height=500,title='Mean NDVI')
+income_plot = clean_gdf.hvplot(c='median_income', geo=True,cmap='YlOrRd', tiles=None,
+                                  width=500, height=500,title='Median Income')
+
+# # Combine plots into a single layout
+# layout = gv.Layout((gvts.ESRI * ndvi_plot) * income_plot)
+
+# # Display the layout
+# layout.opts(shared_axes=False)
+
+#gv.Layout((gvts.ESRI * ndvi_plot) * income_plot)
+
+graphs = (gvts.ESRI * ndvi_plot) + (gvts.ESRI * income_plot)
+
+graphs
+
+# Why do I get two different base maps when I'm requesting gvts.ESRI for both maps?
+```
+
+```{python}
+#| tags: []
+# Scatter plots exhibiting the distribution of NDVI relative to Median year built homes and Median Income.  
+
+year_built_plot = clean_gdf.hvplot(x='mean_ndvi', y='median_year_built',
+                                      width=500, height=500, kind='scatter')
+median_income_plot = clean_gdf.hvplot(x='mean_ndvi', y='median_income',
+                                         width=500, height=500, kind='scatter')
+
+year_built_plot + median_income_plot
+```
+
+YOUR ANSWER HERE
+
+## STEP 4: Explore a linear ordinary least-squares regression
+
+### Model description
+
+One way to find if there is a statistically significant relationship between the socioeconomic parameters from the U.S. Census and greenspace as measured by the fraction of pixels with an NDVI greater than .12 is to run a linear ordinary least squares (OLS) regression and measure how well it is able to predict greenspace given your chosen socioeconomic variables.
+
+Before fitting an OLS regression, you should check that your data are appropriate for the model. In the cell below, write a model description for the linear ordinary least-squares regression that touches on:
+
+  1. Assumptions made about the data
+  2. What is the objective of this model? What metrics could you use to evaluate the fit?
+  3. Advantages and potential problems with choosing this model.
+
+**ADD YOUR MODEL DESCRIPTION HERE**
+
+
+### Data preparation
+
+When fitting statistical models, you should make sure that your data meet the model assumptions through a process of selection and/or transformation. For example, you can:
+  * Select by:
+      * Eliminating observations (rows) or variables (columns) that are missing data
+      * Selecting a model that matches the way in which variables are related to each other (for example, linear models are not good at modeling circles)
+      * Selecting variables that explain the largest amount of variability in the dependent variable.
+  * Transform by:
+      * Transforming a variable so that it follows a normal distribution. The `log` transform is the most common to eliminate excessive skew (e.g. make the data symmetrical), but you should select a transform most suited to your data.
+      * Normalizing or standardizing variables to, for example, eliminate negative numbers or effects caused by variables being in a different range.
+      * Performing a principle component analysis (PCA) to eliminate multicollinearity among the predictor variables
+  
+> NOTE: Keep in mind that data transforms like a log transform or a PCA must be reversed after modeling for the results to be meaningful.
+
+**YOUR TASK:**
+
+  1. Use the `hvplot.scatter_matrix()` function to create an exploratory plot of your data.
+  2. Make any necessary adjustments to your data to make sure that they meet the assumptions of a linear OLS regression.
+  3. Explain any data transformations or selections you made and why
+
+```{python}
+#| deletable: false
+#| nbgrader: {cell_type: code, checksum: 33f8bea92a71d5e2dd4aa68dd5cc019b, grade: false, grade_id: matrix-ans, locked: false, schema_version: 3, solution: true, task: false}
+#| tags: []
+# Assuming df is your DataFrame containing the data
+
+
+# Generate scatter plot matrix with 'column1' on the x-axis and 'column2' on the y-axis
+scatter_matrix(medgdf)
+```
+
+YOUR ANSWER HERE
+
+### Fit and Predict
+
+If you have worked with statistical models before, you may notice that the `scikitlearn` library has a slightly different approach than many software packages. For example, `scikitlearn` emphasizes generic model performance measures like cross-validation and importance over coefficient p-values and correlation. The scikitlearn approach is meant to generalize more smoothly to machine learning (ML) models where the statistical significance is harder to derive mathematically.
+
+**YOUR TASK:**
+
+  1. Use the scikitlearn documentation and/or ChatGPT as a starting point, split your data into training and testing datasets.
+  2. Fit a linear regression to your training data.
+  3. Use your fitted model to predict the testing values.
+  4. Plot the predicted values against the measured values. You can use the following plotting code as a starting point:
+  
+```python
+(
+    test_df
+    .hvplot.scatter(x='measured', y='predicted')
+    .opts(aspect='equal', xlim=(0, y_max), ylim=(0, y_max), width=600, height=600)
+) * hv.Slope(slope=1, y_intercept=0).opts(color='black')
+```
+
+```{python}
+#| deletable: false
+#| nbgrader: {cell_type: code, checksum: f29a17258469e897f140a8cb28d7f951, grade: false, grade_id: model-ans, locked: false, schema_version: 3, solution: true, task: false}
+#| tags: []
+# Extract features and target variable
+features = ['median_income', 'per_capita_income', 'population', 'median_year_built', 'mean_ndvi', 'fraction_ndvi_greater_than_012']
+x = clean_gdf[features]
+y = clean_gdf['tract']
+
+# Impute missing values in features
+imputer = SimpleImputer(strategy='mean')
+x_imputed = imputer.fit_transform(x)
+
+# Split data into training and testing sets
+x_train, x_test, y_train, y_test = train_test_split(x_imputed, y, test_size=0.2, random_state=42)
+
+# Fit a linear regression model
+model = LinearRegression()
+model.fit(x_train, y_train)
+
+# Predict testing values
+y_pred = model.predict(x_test)
+
+# Create DataFrame for plotting
+test_df = pd.DataFrame({'measured': y_test, 'predicted': y_pred})
+
+# Plot predicted vs measured values
+scatter_plot = (test_df.hvplot.scatter(x='measured', y='predicted')
+                .opts(aspect='equal', width=600, height=600)
+                * hv.Slope(slope=1, y_intercept=0).opts(color='black'))
+
+scatter_plot
+```
+
+### Spatial bias
+
+We always need to think about bias, or systematic error, in model results. Every model is going to have some error, but we'd like to see that error evenly distributed. When the error is systematic, it can be an indication that we are missing something important in the model.
+
+In geographic data, it is common for location to be a factor that doesn't get incorporated into models. After all -- we generally expect places that are right next to each other to be more similar than places that are far away (this phenomenon is known as *spatial autocorrelation*). However, models like this linear regression don't take location into account at all.
+
+**YOUR TASK:**
+
+  1. Compute the model error (predicted - measured) for each census tract
+  2. Plot the error as a chloropleth map with a diverging color scheme
+  3. Looking at both of your error plots, what do you notice? What are some possible explanations for any bias you see in your model?
+
+```{python}
+#| deletable: false
+#| nbgrader: {cell_type: code, checksum: 44348f55f22a32ff494a096dd0703c90, grade: false, grade_id: err-plot-ans, locked: false, schema_version: 3, solution: true, task: false}
+#| tags: []
+
+
+```
+
+YOUR ANSWER HERE
+
